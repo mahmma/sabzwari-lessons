@@ -24,7 +24,6 @@
         .btn-text-file { display: inline-block; margin-top: 15px; color: var(--shrine-gold); text-decoration: none; border: 1px solid var(--shrine-gold); padding: 8px 20px; border-radius: 4px; transition: 0.3s; font-weight: bold; }
         .btn-text-file:hover { background: var(--shrine-gold); color: black; }
         
-        /* شريط التقدم */
         .progress-container { display: none; width: 100%; background-color: #333; border-radius: 10px; margin: 15px 0; overflow: hidden; }
         .progress-bar { width: 0%; height: 10px; background-color: var(--shrine-gold); transition: width 0.3s; }
         .progress-text { font-size: 0.8rem; color: var(--shrine-gold); text-align: center; margin-top: 5px; }
@@ -58,7 +57,6 @@
         
         <div id="statusMsg" class="status"></div>
         
-        <!-- شريط التقدم للرفع -->
         <div id="uploadProgressContainer" class="progress-container">
             <div id="uploadProgressBar" class="progress-bar"></div>
             <div id="uploadProgressText" class="progress-text">0%</div>
@@ -66,7 +64,7 @@
 
         <input type="hidden" id="editDocId" value="">
         <input type="text" id="lessonName" placeholder="عنوان الدرس">
-        <label>ملف الصوت (الحد الأقصى 50MB حالياً):</label>
+        <label>ملف الصوت (الحد الأقصى 50MB):</label>
         <input type="file" id="audioFile" accept="audio/*">
         <label>ملف النص (PDF/Word):</label>
         <input type="file" id="textFile" accept=".pdf,.doc,.docx,.txt">
@@ -156,14 +154,15 @@
 
         if (!name) return alert("يرجى كتابة العنوان");
         
-        // تنبيه لحجم الملف
         if (audioFile && audioFile.size > 50 * 1024 * 1024) {
-            return alert("عذراً، حجم الملف الصوتي يتجاوز 50 ميجابايت. يرجى ضغطه أو ترقية خطة Supabase.");
+            return alert("عذراً، حجم الملف الصوتي يتجاوز 50 ميجابايت.");
         }
 
         btn.disabled = true;
         status.innerText = "جاري بدء الرفع...";
         progressContainer.style.display = 'block';
+        progressBar.style.width = '5%';
+        progressText.innerText = '5%';
 
         try {
             let audioUrl = "";
@@ -173,15 +172,15 @@
                 const path = `audio/${Date.now()}_${audioFile.name}`;
                 status.innerText = "جاري رفع الملف الصوتي...";
                 
-                // محاكاة تقدم الرفع (Supabase JS لا يدعم progress بشكل مباشر في upload البسيط، لكننا سنستخدمه للتوضيح)
-                const { data, error } = await supabase.storage.from(bucketName).upload(path, audioFile, {
-                    cacheControl: '3600',
-                    upsert: false
-                });
+                const { data, error } = await supabase.storage.from(bucketName).upload(path, audioFile);
                 
-                if (error) throw error;
+                if (error) {
+                    console.error("Audio Upload Error:", error);
+                    throw new Error("خطأ في رفع الصوت: " + (error.message || "تأكد من سياسات التخزين"));
+                }
+                
                 progressBar.style.width = '50%';
-                progressText.innerText = '50% (تم رفع الصوت)';
+                progressText.innerText = '50%';
                 audioUrl = supabase.storage.from(bucketName).getPublicUrl(path).data.publicUrl;
             }
 
@@ -189,53 +188,70 @@
                 const path = `text/${Date.now()}_${textFile.name}`;
                 status.innerText = "جاري رفع الملف النصي...";
                 const { data, error } = await supabase.storage.from(bucketName).upload(path, textFile);
-                if (error) throw error;
-                progressBar.style.width = '90%';
-                progressText.innerText = '90% (تم رفع النص)';
+                if (error) {
+                    console.error("Text Upload Error:", error);
+                    throw new Error("خطأ في رفع النص: " + (error.message || "تأكد من سياسات التخزين"));
+                }
+                progressBar.style.width = '80%';
+                progressText.innerText = '80%';
                 textUrl = supabase.storage.from(bucketName).getPublicUrl(path).data.publicUrl;
             }
 
-            status.innerText = "جاري حفظ البيانات في القاعدة...";
+            status.innerText = "جاري حفظ البيانات...";
+            const dbData = { title: name };
+            if (audioUrl) dbData.audio_url = audioUrl;
+            if (textUrl) dbData.text_url = textUrl;
+
+            let dbResult;
             if (editId) {
-                const updateData = { title: name };
-                if (audioUrl) updateData.audio_url = audioUrl;
-                if (textUrl) updateData.text_url = textUrl;
-                await supabase.from(tableName).update(updateData).eq('id', editId);
+                dbResult = await supabase.from(tableName).update(dbData).eq('id', editId);
             } else {
-                await supabase.from(tableName).insert([{
-                    title: name,
-                    audio_url: audioUrl,
-                    text_url: textUrl
-                }]);
+                dbResult = await supabase.from(tableName).insert([dbData]);
+            }
+
+            if (dbResult.error) {
+                console.error("Database Error:", dbResult.error);
+                throw new Error("خطأ في قاعدة البيانات: " + dbResult.error.message);
             }
             
             progressBar.style.width = '100%';
-            progressText.innerText = '100% تم بنجاح!';
+            progressText.innerText = '100%';
             alert("تم الحفظ بنجاح!");
             location.reload();
         } catch (e) {
-            console.error(e);
-            alert("حدث خطأ أثناء الحفظ! تأكد من حجم الملف واتصال الإنترنت.");
+            console.error("General Error:", e);
+            alert(e.message || "حدث خطأ غير متوقع!");
+        } finally {
+            btn.disabled = false;
+            status.innerText = "";
+            progressContainer.style.display = 'none';
         }
-        btn.disabled = false;
-        status.innerText = "";
-        progressContainer.style.display = 'none';
     };
 
     async function loadLessons() {
-        const { data, error } = await supabase
-            .from(tableName)
-            .select('*')
-            .order('id', { ascending: false });
-        
-        if (data) {
-            renderUI(data);
-            renderAdminUI(data);
+        try {
+            const { data, error } = await supabase
+                .from(tableName)
+                .select('*')
+                .order('id', { ascending: false });
+            
+            if (error) throw error;
+            if (data) {
+                renderUI(data);
+                renderAdminUI(data);
+            }
+        } catch (e) {
+            console.error("Load Error:", e);
+            document.getElementById('lessonsContainer').innerHTML = `<p style="color:red; text-align:center;">خطأ في تحميل الدروس: ${e.message}</p>`;
         }
     }
 
     function renderUI(lessons) {
         const container = document.getElementById('lessonsContainer');
+        if (lessons.length === 0) {
+            container.innerHTML = '<p style="text-align:center;">لا توجد دروس مضافة حالياً.</p>';
+            return;
+        }
         container.innerHTML = lessons.map(l => {
             const aUrl = l.audio_url || l.audioUrl || "";
             const tUrl = l.text_url || l.textUrl || "";
@@ -271,8 +287,9 @@
 
     window.deleteItem = async (id) => {
         if (confirm("هل تود حذف هذا الدرس نهائياً؟")) {
-            await supabase.from(tableName).delete().eq('id', id);
-            location.reload();
+            const { error } = await supabase.from(tableName).delete().eq('id', id);
+            if (error) alert("خطأ في الحذف: " + error.message);
+            else location.reload();
         }
     };
 
