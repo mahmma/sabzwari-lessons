@@ -23,6 +23,12 @@
         audio { width: 100%; filter: invert(1) hue-rotate(180deg); margin-top: 10px; }
         .btn-text-file { display: inline-block; margin-top: 15px; color: var(--shrine-gold); text-decoration: none; border: 1px solid var(--shrine-gold); padding: 8px 20px; border-radius: 4px; transition: 0.3s; font-weight: bold; }
         .btn-text-file:hover { background: var(--shrine-gold); color: black; }
+        
+        /* شريط التقدم */
+        .progress-container { display: none; width: 100%; background-color: #333; border-radius: 10px; margin: 15px 0; overflow: hidden; }
+        .progress-bar { width: 0%; height: 10px; background-color: var(--shrine-gold); transition: width 0.3s; }
+        .progress-text { font-size: 0.8rem; color: var(--shrine-gold); text-align: center; margin-top: 5px; }
+
         #adminPanel { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.98); z-index: 9999; overflow-y: auto; padding: 20px; box-sizing: border-box; }
         .modal { background: #1a1a1a; max-width: 600px; margin: 20px auto; padding: 30px; border: 1px solid var(--shrine-gold); border-radius: 8px; }
         .settings-section { border-top: 1px solid #333; margin-top: 20px; padding-top: 20px; }
@@ -51,9 +57,16 @@
         <h2 style="color: var(--shrine-gold); text-align: center;">إدارة المنصة العلمية</h2>
         
         <div id="statusMsg" class="status"></div>
+        
+        <!-- شريط التقدم للرفع -->
+        <div id="uploadProgressContainer" class="progress-container">
+            <div id="uploadProgressBar" class="progress-bar"></div>
+            <div id="uploadProgressText" class="progress-text">0%</div>
+        </div>
+
         <input type="hidden" id="editDocId" value="">
         <input type="text" id="lessonName" placeholder="عنوان الدرس">
-        <label>ملف الصوت (جميع الصيغ):</label>
+        <label>ملف الصوت (الحد الأقصى 50MB حالياً):</label>
         <input type="file" id="audioFile" accept="audio/*">
         <label>ملف النص (PDF/Word):</label>
         <input type="file" id="textFile" accept=".pdf,.doc,.docx,.txt">
@@ -137,10 +150,20 @@
         const editId = document.getElementById('editDocId').value;
         const btn = document.getElementById('saveBtn');
         const status = document.getElementById('statusMsg');
+        const progressContainer = document.getElementById('uploadProgressContainer');
+        const progressBar = document.getElementById('uploadProgressBar');
+        const progressText = document.getElementById('uploadProgressText');
 
         if (!name) return alert("يرجى كتابة العنوان");
+        
+        // تنبيه لحجم الملف
+        if (audioFile && audioFile.size > 50 * 1024 * 1024) {
+            return alert("عذراً، حجم الملف الصوتي يتجاوز 50 ميجابايت. يرجى ضغطه أو ترقية خطة Supabase.");
+        }
+
         btn.disabled = true;
-        status.innerText = "جاري معالجة الملفات...";
+        status.innerText = "جاري بدء الرفع...";
+        progressContainer.style.display = 'block';
 
         try {
             let audioUrl = "";
@@ -148,16 +171,31 @@
 
             if (audioFile) {
                 const path = `audio/${Date.now()}_${audioFile.name}`;
-                await supabase.storage.from(bucketName).upload(path, audioFile);
+                status.innerText = "جاري رفع الملف الصوتي...";
+                
+                // محاكاة تقدم الرفع (Supabase JS لا يدعم progress بشكل مباشر في upload البسيط، لكننا سنستخدمه للتوضيح)
+                const { data, error } = await supabase.storage.from(bucketName).upload(path, audioFile, {
+                    cacheControl: '3600',
+                    upsert: false
+                });
+                
+                if (error) throw error;
+                progressBar.style.width = '50%';
+                progressText.innerText = '50% (تم رفع الصوت)';
                 audioUrl = supabase.storage.from(bucketName).getPublicUrl(path).data.publicUrl;
             }
 
             if (textFile) {
                 const path = `text/${Date.now()}_${textFile.name}`;
-                await supabase.storage.from(bucketName).upload(path, textFile);
+                status.innerText = "جاري رفع الملف النصي...";
+                const { data, error } = await supabase.storage.from(bucketName).upload(path, textFile);
+                if (error) throw error;
+                progressBar.style.width = '90%';
+                progressText.innerText = '90% (تم رفع النص)';
                 textUrl = supabase.storage.from(bucketName).getPublicUrl(path).data.publicUrl;
             }
 
+            status.innerText = "جاري حفظ البيانات في القاعدة...";
             if (editId) {
                 const updateData = { title: name };
                 if (audioUrl) updateData.audio_url = audioUrl;
@@ -170,14 +208,18 @@
                     text_url: textUrl
                 }]);
             }
+            
+            progressBar.style.width = '100%';
+            progressText.innerText = '100% تم بنجاح!';
             alert("تم الحفظ بنجاح!");
             location.reload();
         } catch (e) {
             console.error(e);
-            alert("حدث خطأ أثناء الحفظ!");
+            alert("حدث خطأ أثناء الحفظ! تأكد من حجم الملف واتصال الإنترنت.");
         }
         btn.disabled = false;
         status.innerText = "";
+        progressContainer.style.display = 'none';
     };
 
     async function loadLessons() {
@@ -195,14 +237,19 @@
     function renderUI(lessons) {
         const container = document.getElementById('lessonsContainer');
         container.innerHTML = lessons.map(l => {
-            // التحقق من وجود الروابط بمرونة (دعم أسماء الحقول المختلفة)
             const aUrl = l.audio_url || l.audioUrl || "";
             const tUrl = l.text_url || l.textUrl || "";
             
             return `
                 <div class="lesson-card">
                     <div class="lesson-title">● ${l.title}</div>
-                    ${aUrl ? `<audio controls preload="metadata" src="${aUrl}"></audio>` : '<p style="font-size:0.8rem; color:#555;">لا يوجد ملف صوتي</p>'}
+                    ${aUrl ? `
+                        <audio controls preload="metadata">
+                            <source src="${aUrl}" type="audio/mpeg">
+                            <source src="${aUrl}" type="audio/wav">
+                            <source src="${aUrl}" type="audio/ogg">
+                            متصفحك لا يدعم مشغل الصوت.
+                        </audio>` : '<p style="font-size:0.8rem; color:#555;">لا يوجد ملف صوتي</p>'}
                     ${tUrl ? `<a href="${tUrl}" target="_blank" class="btn-text-file">📄 تحميل ملف الدرس</a>` : ''}
                 </div>
             `;
